@@ -51,9 +51,12 @@ jobs:
 
       - name: Package HPI
         run: |
-          sed -i 's/\r$//' mvnw
-          chmod +x mvnw
-          ./mvnw -B -ntp package -DskipTests=${{ inputs.skip_tests == true }}
+          # -Dset.changelist makes git-changelist-maven-extension replace
+          # 999999-SNAPSHOT with <commit-count>.v<hash>. That value does not
+          # end in -SNAPSHOT, so the HPI manifest stays free of the
+          # "(private-...)" suffix and can be used as a Git tag.
+          # Do not modify the worktree first: a dirty tree makes this fail.
+          bash ./mvnw -B -ntp package -Dset.changelist=true -DskipTests=${{ inputs.skip_tests == true }}
 
       - name: Name the release asset
         id: hpi
@@ -68,8 +71,9 @@ jobs:
             echo "Plugin-Version missing from META-INF/MANIFEST.MF" >&2
             exit 1
           fi
-          if [[ "${version}" == *SNAPSHOT* ]]; then
-            version="${version}.$(git rev-parse --short=12 HEAD)"
+          if [[ ! "${version}" =~ ^[0-9A-Za-z._-]+$ ]]; then
+            echo "Plugin version cannot be used as a Git tag: ${version}" >&2
+            exit 1
           fi
           asset="openmfa-${version}.hpi"
           cp target/openmfa.hpi "target/${asset}"
