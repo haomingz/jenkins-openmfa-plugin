@@ -1,0 +1,111 @@
+# Build this fork and attach the .hpi to a GitHub Release.
+# The upstream cd.yaml publishes to the Jenkins update center and needs
+# jenkins-infra Maven credentials. Use this workflow on a personal fork.
+name: Release HPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag. Leave empty to use the Maven version (for example 42.vabcdef).
+        required: false
+        type: string
+      prerelease:
+        description: Mark this release as a pre-release
+        required: false
+        type: boolean
+        default: false
+      skip_tests:
+        description: Skip tests and only package the HPI
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-hpi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish HPI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out plugin
+        uses: actions/checkout@v4
+        with:
+          # Full history so git-changelist-maven-extension can set the version.
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Package HPI
+        run: |
+          sed -i 's/\r$//' mvnw
+          chmod +x mvnw
+          ./mvnw -B -ntp package -DskipTests=${{ inputs.skip_tests == true }}
+
+      - name: Name the release asset
+        id: hpi
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test -f target/openmfa.hpi
+          version="$(unzip -p target/openmfa.hpi META-INF/MANIFEST.MF | awk -F': ' '/^Plugin-Version:/ { print $2 }' | tr -d '\r')"
+          if [[ -z "${version}" ]]; then
+            echo "Plugin-Version missing from META-INF/MANIFEST.MF" >&2
+            exit 1
+          fi
+          if [[ "${version}" == *SNAPSHOT* ]]; then
+            version="${version}.$(git rev-parse --short=12 HEAD)"
+          fi
+          asset="openmfa-${version}.hpi"
+          cp target/openmfa.hpi "target/${asset}"
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ -n "${INPUT_TAG}" ]]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="${version}"
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "asset=target/${asset}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### OpenMFA ${version}"
+            echo "- tag: \`${tag}\`"
+            echo "- file: \`${asset}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.hpi.outputs.tag }}
+          ASSET: ${{ steps.hpi.outputs.asset }}
+          VERSION: ${{ steps.hpi.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease == true }}
+        run: |
+          set -euo pipefail
+          title="openmfa ${VERSION}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${ASSET}" --clobber
+          else
+            args=(release create "${TAG}" "${ASSET}" --target "${GITHUB_SHA}" --title "${title}" --generate-notes)
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
+          fi
+          gh release view "${TAG}" --json url --jq .url >> "${GITHUB_STEP_SUMMARY}"
