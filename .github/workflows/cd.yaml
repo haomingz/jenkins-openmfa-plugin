@@ -1,5 +1,10 @@
 # Note: additional setup is required, see https://www.jenkins.io/redirect/continuous-delivery-of-plugins
 #
+# This workflow publishes to the Jenkins update center. It needs
+# MAVEN_USERNAME and MAVEN_TOKEN from jenkins-infra, so it does not
+# work on a personal fork. To build an HPI and attach it to a GitHub
+# Release, run .github/workflows/release-hpi.yml instead.
+#
 # Please find additional hints for individual trigger use case
 # configuration options inline this script below.
 #
